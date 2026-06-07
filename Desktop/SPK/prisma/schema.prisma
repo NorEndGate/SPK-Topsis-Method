@@ -1,0 +1,256 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RoleCode {
+  ADMIN
+  NUTRITIONIST
+  USER
+}
+
+enum CriterionAttribute {
+  BENEFIT
+  COST
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  RESTORE
+  LOGIN
+  LOGOUT
+  CALCULATE_TOPSIS
+  EXPORT_REPORT
+}
+
+enum RankingRunStatus {
+  SUCCESS
+  FAILED
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+
+  accounts    Account[]
+  sessions    Session[]
+  roles       UserRole[]
+  auditLogs   AuditLog[]
+  rankingRuns RankingRun[]
+
+  @@map("user")
+  @@index([deletedAt])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("session")
+  @@index([userId])
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  userId                String
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("account")
+  @@index([userId])
+  @@unique([providerId, accountId])
+}
+
+model Verification {
+  id         String    @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime? @default(now())
+  updatedAt  DateTime? @updatedAt
+
+  @@map("verification")
+  @@index([identifier])
+}
+
+model Role {
+  id        String   @id @default(cuid())
+  code      RoleCode @unique
+  name      String
+  createdAt DateTime @default(now())
+
+  users UserRole[]
+
+  @@map("roles")
+}
+
+model UserRole {
+  id        String   @id @default(cuid())
+  userId    String
+  roleId    String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@map("user_roles")
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
+}
+
+model Criterion {
+  id          String             @id @default(cuid())
+  code        String             @unique
+  name        String
+  description String?
+  weight      Float
+  attribute   CriterionAttribute @default(BENEFIT)
+  order       Int                @default(0)
+  isActive    Boolean            @default(true)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  deletedAt   DateTime?
+
+  assessments Assessment[]
+
+  @@map("criteria")
+  @@index([attribute])
+  @@index([isActive, deletedAt])
+  @@index([order])
+}
+
+model Alternative {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  description String?
+  imageUrl    String?
+  isDemo      Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deletedAt   DateTime?
+
+  assessments    Assessment[]
+  rankingResults RankingResult[]
+
+  @@map("alternatives")
+  @@index([name])
+  @@index([isDemo])
+  @@index([isActive, deletedAt])
+}
+
+model Assessment {
+  id            String   @id @default(cuid())
+  alternativeId String
+  criterionId   String
+  score         Float
+  note          String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  deletedAt     DateTime?
+
+  alternative Alternative @relation(fields: [alternativeId], references: [id], onDelete: Cascade)
+  criterion   Criterion   @relation(fields: [criterionId], references: [id], onDelete: Cascade)
+
+  @@map("assessments")
+  @@unique([alternativeId, criterionId])
+  @@index([alternativeId])
+  @@index([criterionId])
+  @@index([deletedAt])
+}
+
+model RankingRun {
+  id               String           @id @default(cuid())
+  status           RankingRunStatus @default(SUCCESS)
+  criteriaSnapshot Json
+  matrixSnapshot   Json
+  normalizedMatrix Json
+  weightedMatrix   Json
+  idealPositive    Json
+  idealNegative    Json
+  errorMessage      String?
+  createdById       String?
+  createdAt         DateTime        @default(now())
+
+  createdBy User?           @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  results   RankingResult[]
+
+  @@map("ranking_runs")
+  @@index([status])
+  @@index([createdAt])
+  @@index([createdById])
+}
+
+model RankingResult {
+  id            String   @id @default(cuid())
+  rankingRunId  String
+  alternativeId String
+  rank          Int
+  dPositive     Float
+  dNegative     Float
+  preference    Float
+  detail        Json?
+  createdAt     DateTime @default(now())
+
+  rankingRun  RankingRun  @relation(fields: [rankingRunId], references: [id], onDelete: Cascade)
+  alternative Alternative @relation(fields: [alternativeId], references: [id], onDelete: Restrict)
+
+  @@map("ranking_results")
+  @@unique([rankingRunId, alternativeId])
+  @@index([rankingRunId, rank])
+  @@index([alternativeId])
+  @@index([preference])
+}
+
+model AuditLog {
+  id         String      @id @default(cuid())
+  actorId    String?
+  action     AuditAction
+  entityType String
+  entityId   String?
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime    @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@map("audit_logs")
+  @@index([actorId])
+  @@index([action])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
