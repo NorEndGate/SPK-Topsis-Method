@@ -5,7 +5,7 @@ export const assessmentBulkSchema = z.object({
   items: z.array(
     z.object({
       criterionId: z.string().min(1),
-      score: z.coerce.number().min(1).max(5),
+      score: z.coerce.number().finite(),
       note: z.string().trim().max(500).optional(),
     }),
   ),

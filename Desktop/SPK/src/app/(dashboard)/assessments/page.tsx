@@ -22,7 +22,7 @@ export default async function AssessmentsPage() {
     <>
       <PageHeader
         title="Input Penilaian"
-        description="Input skor 1 sampai 5 untuk setiap alternatif terhadap seluruh kriteria aktif."
+        description="Input skor desimal bebas untuk setiap alternatif terhadap seluruh kriteria aktif."
       />
       <main className="p-6">
         <AssessmentManager

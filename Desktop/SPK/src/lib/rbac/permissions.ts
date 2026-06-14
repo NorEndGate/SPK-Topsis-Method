@@ -11,7 +11,7 @@ export type Permission =
   | "assessments:read"
   | "topsis:calculate"
   | "rankings:read"
-  | "reports:export"
+  | "reports:import"
   | "audit:read"
   | "profile:update";
 
@@ -27,7 +27,7 @@ const rolePermissions: Record<AppRole, Permission[]> = {
     "assessments:read",
     "topsis:calculate",
     "rankings:read",
-    "reports:export",
+    "reports:import",
     "audit:read",
     "profile:update",
   ],
@@ -40,7 +40,7 @@ const rolePermissions: Record<AppRole, Permission[]> = {
     "assessments:read",
     "topsis:calculate",
     "rankings:read",
-    "reports:export",
+    "reports:import",
     "profile:update",
   ],
   USER: [

@@ -216,7 +216,7 @@ export function AssessmentManager({
           <div>
             <h2 className="text-xl font-semibold">{selectedAlternative?.name ?? "Pilih alternatif"}</h2>
             <p className="text-sm text-muted-foreground">
-              Isi semua skor 1 sampai 5 untuk setiap kriteria aktif.
+              Isi skor desimal bebas untuk setiap kriteria aktif.
             </p>
           </div>
           <div className="flex gap-2">
@@ -259,8 +259,7 @@ export function AssessmentManager({
                 </div>
                 <input
                   type="number"
-                  min={1}
-                  max={5}
+                  step="any"
                   value={currentValue.score}
                   onChange={(event) =>
                     setFormState((current) => ({

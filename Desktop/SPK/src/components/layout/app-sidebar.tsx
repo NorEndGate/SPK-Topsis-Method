@@ -1,12 +1,11 @@
 import Link from "next/link";
 import {
   ClipboardCheck,
-  FileDown,
-  History,
   LayoutDashboard,
   Settings,
   SlidersHorizontal,
   Trophy,
+  Upload,
   Utensils,
 } from "lucide-react";
 
@@ -16,8 +15,7 @@ const navigation = [
   { href: "/alternatives", label: "Alternatif", icon: Utensils },
   { href: "/assessments", label: "Penilaian", icon: ClipboardCheck },
   { href: "/rankings", label: "Ranking", icon: Trophy },
-  { href: "/reports", label: "Laporan", icon: FileDown },
-  { href: "/audit-logs", label: "Audit Log", icon: History },
+  { href: "/reports", label: "Impor Excel", icon: Upload },
   { href: "/settings", label: "Pengaturan", icon: Settings },
 ];
 
