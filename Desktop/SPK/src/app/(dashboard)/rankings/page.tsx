@@ -18,7 +18,7 @@ export default async function RankingsPage() {
           description="Hasil rekomendasi makanan berdasarkan nilai preferensi TOPSIS."
           action={
             <Link
-              href="/rankings/demo"
+              href="/rankings/detail"
               className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
             >
               Lihat Detail

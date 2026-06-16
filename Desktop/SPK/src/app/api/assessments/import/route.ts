@@ -30,6 +30,7 @@ export async function POST(request: Request) {
 
     const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
     const sheetName = workbook.SheetNames[0];
+    const kriteriaSheetName = workbook.SheetNames.find((n) => String(n).toLowerCase().includes("kriteria")) ?? null;
 
     if (!sheetName) {
       return NextResponse.json(
@@ -49,6 +50,64 @@ export async function POST(request: Request) {
       blankrows: true,
       defval: "",
     }) as SheetRow[];
+
+    // parse conversion rules (if present) from the 'kriteria & sub' sheet
+    const conversionMap = new Map<string, { weight?: number; buckets: Array<{ min?: number; max?: number; greater?: number; rank: number }> }>();
+    if (kriteriaSheetName) {
+      try {
+        const ks = workbook.Sheets[kriteriaSheetName];
+        const krows = XLSX.utils.sheet_to_json<SheetRow>(ks, { header: 1, defval: "" }) as SheetRow[];
+
+        // header row with criterion names is around row index 3 in the workbook
+        const nameRow = krows[3] ?? [];
+        const pctRow = krows[5] ?? [];
+        // ranges start at row index 7..11
+        const rangeStart = 7;
+        const rangeEnd = 11;
+
+        for (let col = 0; col < nameRow.length; col += 2) {
+          const rawName = String(nameRow[col] ?? "").trim();
+          if (!rawName) continue;
+          const key = normalizeText(rawName);
+          // parse percentage weight if present (e.g. 'W=10%')
+          let weight: number | undefined;
+          try {
+            const pctCell = String(pctRow[col] ?? "").trim();
+            const m = pctCell.match(/(\d+)%?/);
+            if (m) weight = Number(m[1]);
+          } catch (e) {
+            weight = undefined;
+          }
+
+          const buckets: Array<{ min?: number; max?: number; greater?: number; rank: number }> = [];
+          for (let r = rangeStart; r <= rangeEnd; r++) {
+            const rangeCell = String((krows[r] ?? [])[col] ?? "").trim();
+            const rankCell = (krows[r] ?? [])[col + 1];
+            if (!rangeCell) continue;
+            const rank = Number(rankCell);
+            if (!Number.isFinite(rank)) continue;
+
+            // parse patterns: 'a-b', 'a - b', '>500', '0-1'
+            const gt = rangeCell.match(/^>\s*(\d+(?:\.?\d+)?)$/);
+            const dash = rangeCell.match(/^(\d+(?:\.?\d+)?)\s*-\s*(\d+(?:\.?\d+)?)$/);
+
+            if (gt) {
+              buckets.push({ greater: Number(gt[1]), rank });
+            } else if (dash) {
+              buckets.push({ min: Number(dash[1]), max: Number(dash[2]), rank });
+            } else {
+              // fallback: try numeric exact
+              const num = Number(rangeCell);
+              if (Number.isFinite(num)) buckets.push({ min: num, max: num, rank });
+            }
+          }
+
+          conversionMap.set(key, { weight, buckets });
+        }
+      } catch (e) {
+        // ignore conversion parse errors; importer will still try numeric import
+      }
+    }
 
     const headerRow = rows[4] ?? [];
     const sourceCriteria = extractSourceCriteria(headerRow);
@@ -71,7 +130,7 @@ export async function POST(request: Request) {
       select: { id: true, code: true, name: true, attribute: true, weight: true, order: true },
     });
 
-    const criterionLookup = await synchronizeCriteriaFromWorkbook(sourceCriteria, existingCriteria);
+    const criterionLookup = await synchronizeCriteriaFromWorkbook(sourceCriteria, existingCriteria, conversionMap);
     const activeCriteria = sourceCriteria.map((sourceCriterion) => criterionLookup.get(sourceCriterion.key));
 
     if (activeCriteria.some((criterion) => !criterion)) {
@@ -126,6 +185,7 @@ export async function POST(request: Request) {
         const rawCriterionValues = activeCriteria.map((criterion, criterionIndex) => ({
           criterion: criterion!,
           value: row[criterionIndex + 2],
+          sourceKey: sourceCriteria[criterionIndex]?.key,
         }));
 
         if (!alternativeName && rawCriterionValues.every(({ value }) => !looksNumeric(value))) {
@@ -136,10 +196,11 @@ export async function POST(request: Request) {
           throw new Error(`Baris ${rowIndex + 1}: nama alternatif pada kolom B wajib diisi.`);
         }
 
-        const scoredItems = rawCriterionValues.map(({ criterion, value }) => ({
-          criterionId: criterion.id,
-          score: parseDecimal(value, rowIndex + 1, criterion!.code),
-        }));
+        const scoredItems = rawCriterionValues.map(({ criterion, value, sourceKey }) => {
+          const numeric = parseDecimal(value, rowIndex + 1, criterion!.code);
+          const convertedScore = convertWorkbookScore(criterion.name, numeric, conversionMap.get(sourceKey ?? ""));
+          return { criterionId: criterion.id, score: convertedScore };
+        });
 
         const alternativeSlug = slugify(alternativeName);
         const alternative = await tx.alternative.upsert({
@@ -261,6 +322,7 @@ function extractSourceCriteria(headerRow: SheetRow) {
 async function synchronizeCriteriaFromWorkbook(
   sourceCriteria: SourceCriterion[],
   existingCriteria: Array<{ id: string; code: string; name: string; attribute: string; weight: number; order: number }>,
+  conversionMap?: Map<string, { weight?: number; buckets: Array<{ min?: number; max?: number; greater?: number; rank: number }> }>,
 ) {
   const lookup = new Map<string, { id: string; code: string; name: string }>();
 
@@ -273,9 +335,32 @@ async function synchronizeCriteriaFromWorkbook(
 
   for (const sourceCriterion of sourceCriteria) {
     const existing = lookup.get(sourceCriterion.key);
+    const conv = conversionMap?.get(sourceCriterion.key);
+    const weight = conv?.weight ?? 1;
 
     if (existing) {
-      lookup.set(sourceCriterion.key, existing);
+      await prisma.criterion.update({
+        where: { id: existing.id },
+        data: {
+          name: sourceCriterion.name,
+          code: sourceCriterion.code,
+          isActive: true,
+          deletedAt: null,
+          weight,
+          attribute: "BENEFIT",
+          order: sourceCriterion.order,
+        },
+      });
+
+      const updated = {
+        id: existing.id,
+        code: sourceCriterion.code,
+        name: sourceCriterion.name,
+      };
+
+      lookup.set(normalizeText(sourceCriterion.code), updated);
+      lookup.set(normalizeText(sourceCriterion.name), updated);
+      lookup.set(sourceCriterion.key, updated);
       continue;
     }
 
@@ -285,14 +370,14 @@ async function synchronizeCriteriaFromWorkbook(
         name: sourceCriterion.name,
         isActive: true,
         deletedAt: null,
-        weight: 1,
+        weight: weight,
         attribute: "BENEFIT",
         order: sourceCriterion.order,
       },
       create: {
         code: sourceCriterion.code,
         name: sourceCriterion.name,
-        weight: 1,
+        weight: weight,
         attribute: "BENEFIT",
         order: sourceCriterion.order,
         isActive: true,
@@ -334,6 +419,51 @@ function parseDecimal(value: unknown, rowNumber: number, columnCode: string) {
 
   if (!Number.isFinite(numericValue)) {
     throw new Error(`Baris ${rowNumber}: nilai untuk kriteria ${columnCode} harus berupa angka desimal.`);
+  }
+
+  return numericValue;
+}
+
+function convertWorkbookScore(
+  criterionName: string,
+  numericValue: number,
+  conversion?: { weight?: number; buckets: Array<{ min?: number; max?: number; greater?: number; rank: number }> },
+) {
+  const normalizedName = normalizeText(criterionName);
+
+  if (normalizedName === "protein" || normalizedName === "lemak" || normalizedName === "karbohidrat") {
+    if (numericValue <= 1) return 1;
+    if (numericValue <= 25) return 2;
+    if (numericValue <= 50) return 3;
+    if (numericValue <= 75) return 4;
+    return 5;
+  }
+
+  if (normalizedName === "serat") {
+    if (numericValue <= 1) return 1;
+    if (numericValue <= 3) return 2;
+    if (numericValue <= 5) return 3;
+    if (numericValue <= 7) return 4;
+    return 5;
+  }
+
+  if (normalizedName === "natrium" || normalizedName === "salt" || normalizedName === "garam") {
+    if (numericValue > 500) return 1;
+    if (numericValue > 350) return 2;
+    if (numericValue > 200) return 3;
+    if (numericValue > 100) return 4;
+    return 5;
+  }
+
+  if (conversion?.buckets?.length) {
+    for (const bucket of conversion.buckets) {
+      if (bucket.greater !== undefined && numericValue > bucket.greater) {
+        return bucket.rank;
+      }
+      if (bucket.min !== undefined && bucket.max !== undefined && numericValue >= bucket.min && numericValue <= bucket.max) {
+        return bucket.rank;
+      }
+    }
   }
 
   return numericValue;
